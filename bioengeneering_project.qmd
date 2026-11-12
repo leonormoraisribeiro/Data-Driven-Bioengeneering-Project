@@ -4,15 +4,23 @@ format: html
 editor: visual
 ---
 
-# Project Bioengeneering
+# Project Bioengineering
 
 ### loading the data
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+BiocManager::install(c("SummarizedExperiment", "DESeq2"), update = FALSE, ask = FALSE)
+```
 
 ```{r}
 library(SummarizedExperiment)
 library(DESeq2)
 
-base_dir <- "~/Documents/macrophage_subset12_salmon"
+base_dir <- "~/Documents/27200/macrophage_subset12_salmon"
 
 # 1. Load SummarizedExperiment
 se <- readRDS(file.path(base_dir, "salmon.merged.gene.SummarizedExperiment.rds"))
