@@ -1,0 +1,7 @@
+data/
+*.rds
+*.tsv
+*.zip
+.Rhistory
+.RData
+.Rproj.user

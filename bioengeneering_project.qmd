@@ -1,0 +1,36 @@
+---
+title: "data driven bioengeneering"
+format: html
+editor: visual
+---
+
+# Project Bioengeneering
+
+### loading the data
+
+```{r}
+library(SummarizedExperiment)
+library(DESeq2)
+
+base_dir <- "~/Documents/macrophage_subset12_salmon"
+
+# 1. Load SummarizedExperiment
+se <- readRDS(file.path(base_dir, "salmon.merged.gene.SummarizedExperiment.rds"))
+
+# 2. Load Metadata that is inside the folder pipeline_info
+meta_path <- file.path(base_dir, "pipeline_info/sample_metadata_macrophage_subset12.tsv")
+meta <- read.delim(meta_path, stringsAsFactors = FALSE)
+
+# 3. check collumn names and order 
+head(meta)
+rownames(meta) <- meta$sample
+meta <- meta[colnames(se), ]
+stopifnot(identical(colnames(se), rownames(meta)))
+
+# 4. clean the IDs Ensembl
+colData(se) <- DataFrame(meta)
+rownames(se) <- sub("\\..*", "", rownames(se))
+
+# just to make sure that everything works
+se
+```
