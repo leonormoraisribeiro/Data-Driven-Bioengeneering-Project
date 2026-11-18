@@ -6,39 +6,187 @@ editor: visual
 
 # Project Bioengineering
 
-### loading the data
+## 27200 Project: Macrophage Response to IFNg and Salmonella
+
+# 1. Load Libraries
+
+First, we load all the R packages needed for our analysis.
 
 ```{r}
-if (!requireNamespace("BiocManager", quietly = TRUE)) {
-  install.packages("BiocManager")
-}
+# Uncomment and run once if packages are missing:
+# install.packages(c("tidyverse", "ggplot2", "pheatmap", "ggrepel", "msigdbr", "igraph"))
+# BiocManager::install(c("SummarizedExperiment", "DESeq2", "fgsea", "STRINGdb"))
 
-BiocManager::install(c("SummarizedExperiment", "DESeq2"), update = FALSE, ask = FALSE)
-```
-
-```{r}
+library(tidyverse)
 library(SummarizedExperiment)
 library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(ggrepel)
+library(fgsea)
+library(msigdbr)
+library(STRINGdb)
+library(igraph)
+```
 
+------------------------------------------------------------------------
+
+# 2. Load Data & Metadata
+
+We load the gene expression object and the sample information table (metadata.tsv), making sure the sample names match in the exact same order.
+
+```{r}
+# folder path
 base_dir <- "~/Documents/27200/macrophage_subset12_salmon"
 
-# 1. Load SummarizedExperiment
+# load the gene expression data (SummarizedExperiment)
 se <- readRDS(file.path(base_dir, "salmon.merged.gene.SummarizedExperiment.rds"))
 
-# 2. Load Metadata that is inside the folder pipeline_info
+# load the sample metadata
 meta_path <- file.path(base_dir, "pipeline_info/sample_metadata_macrophage_subset12.tsv")
 meta <- read.delim(meta_path, stringsAsFactors = FALSE)
 
-# 3. check collumn names and order 
-head(meta)
+# align metadata rows with count matrix columns
 rownames(meta) <- meta$sample
 meta <- meta[colnames(se), ]
-stopifnot(identical(colnames(se), rownames(meta)))
+stopifnot(identical(colnames(se), rownames(meta))) # Must be TRUE
 
-# 4. clean the IDs Ensembl
+# attach metadata to the object and clean Ensembl IDs (remove version numbers like .18)
 colData(se) <- DataFrame(meta)
 rownames(se) <- sub("\\..*", "", rownames(se))
 
-# just to make sure that everything works
-se
+# check experimental design (supposed to be 48 samples = 12*4)
+table(colData(se)$line, colData(se)$condition)
+```
+
+------------------------------------------------------------------------
+
+# 3. Quality Control & Sanity Checks
+
+Before running statistics, we prepare the DESeq2 dataset (\~ line + condition to account for donor differences), verify sample sex using Y-chromosome genes, check macrophage markers, and remove lowly expressed genes.
+
+```{r}
+# set factor levels ("naive" is our control)
+colData(se)$condition <- factor(colData(se)$condition, 
+                                levels = c("naive", "IFNg", "SL1344", "IFNg_SL1344"))
+colData(se)$line <- factor(colData(se)$line)
+colData(se)$sex  <- factor(colData(se)$sex)
+
+# round counts to integers (required by DESeq2)
+counts_rounded <- round(assay(se, "counts"))
+
+# DESeq2 object
+dds <- DESeqDataSetFromMatrix(
+  countData = counts_rounded,
+  colData   = colData(se),
+  design    = ~ line + condition
+)
+rowData(dds)$gene_name <- rowData(se)$gene_name
+```
+
+Sanity Check 1:
+
+```{r}
+# verify donor sex using Y-chromosome genes (XIST is silenced in iPSCs)
+y_genes <- c("UTY", "DDX3Y", "RPS4Y1", "KDM5D")
+y_counts <- counts(dds)[rowData(dds)$gene_name %in% y_genes, ]
+
+sex_check <- data.frame(
+  sample       = colnames(dds),
+  line         = colData(dds)$line,
+  sex_metadata = colData(dds)$sex,
+  Y_gene_sum   = colSums(y_counts)
+)
+head(sex_check, 10)
+```
+
+↑ there are some alignment errors but it's normal\
+you can clearly see that there are way more Ygenes in males
+
+Sanity Check 2:
+
+```{r}
+# check macrophage lineage markers
+mac_genes <- c("CD14", "FCGR3A", "MRC1")
+mac_counts <- counts(dds)[rowData(dds)$gene_name %in% mac_genes, ]
+rownames(mac_counts) <- rowData(dds)$gene_name[rowData(dds)$gene_name %in% mac_genes]
+summary(t(mac_counts))
+```
+
+↑ all the mins are over 1000 meaning that the macrophage were correctly differenciated
+
+```{r}
+#nrow(dds)
+cat("Genes kept before filtering:", nrow(dds), "\n")
+
+# pre-filtering: Keep genes with at least 10 counts in at least 12 samples
+keep <- rowSums(counts(dds) >= 10) >= 12
+dds <- dds[keep, ]
+
+cat("Genes kept after filtering:", nrow(dds), "\n")
+```
+
+------------------------------------------------------------------------
+
+# 4. Exploratory Data Visualization (PCA)
+
+We apply Variance-Stabilizing Transformation (vst) so highly expressed genes do not dominate the plot, and visualize how samples group together in a Principal Component Analysis (PCA).
+
+```{r}
+# transform counts with vst
+vsd <- vst(dds, blind = TRUE)
+
+pcaData <- plotPCA(vsd, intgroup = c("condition", "line", "sex"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = condition, shape = sex)) +
+  geom_point(size = 3.5, alpha = 0.85) +
+  labs(
+    title = "PCA of Human iPSC-Derived Macrophages",
+    x     = paste0("PC1: ", percentVar[1], "% variance"),
+    y     = paste0("PC2: ", percentVar[2], "% variance"),
+    color = "Condition",
+    shape = "Donor Sex"
+  ) +
+  theme_bw()
+```
+
+↑ you can clearly see that the conditions are clearly separated and have a clean distribution with the donor sex
+
+------------------------------------------------------------------------
+
+# 5. Differential Expression Analysis (DESeq2)
+
+### Pairwise Comparisons (`~ line + condition`)
+
+We test which genes change significantly (padj \< 0.05 and \|log2FoldChange\| \> 1) between treatments.
+
+```{r}
+# run DESeq2
+dds <- DESeq(dds)
+
+# extract results between out conditions
+res_IFNg   <- results(dds, contrast = c("condition", "IFNg", "naive"), alpha = 0.05)
+res_Salm   <- results(dds, contrast = c("condition", "SL1344", "naive"), alpha = 0.05)
+res_Both   <- results(dds, contrast = c("condition", "IFNg_SL1344", "naive"), alpha = 0.05)
+res_Primed <- results(dds, contrast = c("condition", "IFNg_SL1344", "SL1344"), alpha = 0.05)
+
+# summary table of signiticant genes
+deg_summary <- data.frame(
+  Comparison = c("IFNg vs naive", "SL1344 vs naive", "IFNg_SL1344 vs naive", "IFNg_SL1344 vs SL1344 (Priming)"),
+  Up_regulated = c(
+    sum(res_IFNg$padj < 0.05 & res_IFNg$log2FoldChange > 1, na.rm = TRUE),
+    sum(res_Salm$padj < 0.05 & res_Salm$log2FoldChange > 1, na.rm = TRUE),
+    sum(res_Both$padj < 0.05 & res_Both$log2FoldChange > 1, na.rm = TRUE),
+    sum(res_Primed$padj < 0.05 & res_Primed$log2FoldChange > 1, na.rm = TRUE)
+  ),
+  Down_regulated = c(
+    sum(res_IFNg$padj < 0.05 & res_IFNg$log2FoldChange < -1, na.rm = TRUE),
+    sum(res_Salm$padj < 0.05 & res_Salm$log2FoldChange < -1, na.rm = TRUE),
+    sum(res_Both$padj < 0.05 & res_Both$log2FoldChange < -1, na.rm = TRUE),
+    sum(res_Primed$padj < 0.05 & res_Primed$log2FoldChange < -1, na.rm = TRUE)
+  )
+)
+deg_summary$Total <- deg_summary$Up_regulated + deg_summary$Down_regulated
+deg_summary
 ```
