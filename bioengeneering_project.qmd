@@ -1,5 +1,5 @@
 ---
-title: "data driven bioengeneering"
+title: "data driven bioengineering"
 format: html
 editor: visual
 ---
