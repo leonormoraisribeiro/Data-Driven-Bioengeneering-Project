@@ -13,6 +13,8 @@ editor: visual
 First, we load all the R packages needed for our analysis.
 
 ```{r}
+#| message: false
+#| warning: false
 # Uncomment and run once if packages are missing:
 # install.packages(c("tidyverse", "ggplot2", "pheatmap", "ggrepel", "msigdbr", "igraph"))
 # BiocManager::install(c("SummarizedExperiment", "DESeq2", "fgsea", "STRINGdb"))
