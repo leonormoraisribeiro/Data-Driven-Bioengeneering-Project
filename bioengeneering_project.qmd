@@ -224,3 +224,5 @@ pos_synergy <- interaction_df %>%
 
 cat("Positively synergistic genes:", nrow(pos_synergy), "\n")
 ```
+
+↑ these are the top 10 genes that have a logfoldchange difference between priming with salmonella and no priming
