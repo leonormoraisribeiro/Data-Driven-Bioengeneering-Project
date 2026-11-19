@@ -190,3 +190,37 @@ deg_summary <- data.frame(
 deg_summary$Total <- deg_summary$Up_regulated + deg_summary$Down_regulated
 deg_summary
 ```
+
+------------------------------------------------------------------------
+
+## Synergy Iteraction Model (\~ line + IFNg + Salmonella + IFNg : Salmonella)
+
+we are trying to test if the IFNg + Salmonella equals just a summed effect or if there is actually an interaction between them that can change something in gene expression (synergy or saturation)
+
+```{r}
+# set factor levels for IFNg and Salmonella, no is reference
+colData(dds)$IFNg <- factor(colData(dds)$IFNg, levels = c("no", "yes"))
+colData(dds)$Salmonella <- factor(colData(dds)$Salmonella, levels = c("no", "yes"))
+
+dds_int <- dds
+
+design(dds_int) <- ~ line + IFNg + Salmonella + IFNg:Salmonella
+dds_int <- DESeq(dds_int)
+
+res_interaction <- results(dds_int, name = "IFNgyes.Salmonellayes", alpha = 0.05)
+
+# create a clean dataset with gene names
+interaction_df <- as.data.frame(res_interaction)
+interaction_df$gene_name <- rowData(dds_int)$gene_name
+interaction_df <- interaction_df %>% 
+  filter(!is.na(padj)) %>%
+  arrange(padj)
+
+# top 10 interaction genes
+head(interaction_df[, c("gene_name", "baseMean", "log2FoldChange", "padj")], 10)
+
+pos_synergy <- interaction_df %>%
+  filter(padj < 0.05 & log2FoldChange > 1)
+
+cat("Positively synergistic genes:", nrow(pos_synergy), "\n")
+```
